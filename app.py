@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import random
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,19 @@ except Exception:  # pragma: no cover
 APP_NAME = "MoMents"
 REPOSITORY_DIR = Path(__file__).with_name("repository")
 
+MOTIVATIONAL_QUOTES = [
+    "Small progress is still progress.",
+    "Start where you are. Use what you have. Do what you can.",
+    "Consistency beats intensity.",
+    "Done is better than perfect.",
+    "One step at a time — you’ve got this.",
+    "Focus on the next right thing.",
+    "Your future self will thank you.",
+    "Keep going — momentum is everything.",
+    "Make it work, then make it better.",
+    "Today’s effort is tomorrow’s results.",
+]
+
 
 def _get_slack_user_token() -> str | None:
     # Prefer Streamlit secrets, then environment.
@@ -53,7 +67,7 @@ def _ts_to_iso_local(ts: int) -> str:
     return dt.datetime.fromtimestamp(ts, tz=dt.timezone.utc).astimezone().isoformat()
 
 
-def _fetch_slack_reminders_as_events(token: str) -> tuple[list[dict[str, Any]], str | None]:
+def _fetch_slack_reminders(token: str) -> tuple[list[dict[str, Any]], str | None]:
     if WebClient is None:
         return [], "Missing dependency 'slack_sdk'. Install from requirements.txt."
 
@@ -61,38 +75,10 @@ def _fetch_slack_reminders_as_events(token: str) -> tuple[list[dict[str, Any]], 
         client = WebClient(token=token)
         resp = client.reminders_list()
         reminders = resp.get("reminders", []) or []
-
-        events: list[dict[str, Any]] = []
-        for r in reminders:
-            # Defensive parsing: Slack returns reminder dicts.
-            if not isinstance(r, dict):
-                continue
-
-            text = r.get("text") or "Reminder"
-            rid = r.get("id")
-
-            # 'time' is the next trigger time (for recurring reminders too).
-            t = r.get("time")
-            if not isinstance(t, int):
-                continue
-
-            # Optionally skip completed reminders.
-            if r.get("complete_ts"):
-                continue
-
-            events.append(
-                {
-                    "id": rid,
-                    "title": str(text),
-                    "start": _ts_to_iso_local(t),
-                    "allDay": False,
-                }
-            )
-
-        return events, None
+        parsed = [r for r in reminders if isinstance(r, dict)]
+        return parsed, None
 
     except SlackApiError as e:  # type: ignore[misc]
-        # e.response["error"] is the canonical error string.
         err = None
         try:
             err = e.response.get("error")
@@ -101,6 +87,57 @@ def _fetch_slack_reminders_as_events(token: str) -> tuple[list[dict[str, Any]], 
         return [], f"Slack API error: {err}"
     except Exception as e:
         return [], f"Failed to fetch Slack reminders: {e}"
+
+
+def _fetch_slack_reminders_as_events(token: str) -> tuple[list[dict[str, Any]], str | None]:
+    reminders, err = _fetch_slack_reminders(token)
+    if err:
+        return [], err
+
+    events: list[dict[str, Any]] = []
+    for r in reminders:
+        text = r.get("text") or "Reminder"
+        rid = r.get("id")
+
+        t = r.get("time")
+        if not isinstance(t, int):
+            continue
+
+        # Skip completed reminders for calendar view.
+        if r.get("complete_ts"):
+            continue
+
+        events.append(
+            {
+                "id": rid,
+                "title": str(text),
+                "start": _ts_to_iso_local(t),
+                "allDay": False,
+            }
+        )
+
+    return events, None
+
+
+def _complete_slack_reminder(token: str, reminder_id: str) -> tuple[bool, str | None]:
+    if WebClient is None:
+        return False, "Missing dependency 'slack_sdk'. Install from requirements.txt."
+
+    try:
+        client = WebClient(token=token)
+        # Requires scope reminders:write
+        client.reminders_complete(reminder=reminder_id)
+        return True, None
+
+    except SlackApiError as e:  # type: ignore[misc]
+        err = None
+        try:
+            err = e.response.get("error")
+        except Exception:
+            err = str(e)
+        return False, f"Slack API error: {err}"
+    except Exception as e:
+        return False, f"Failed to complete reminder: {e}"
 
 
 def set_page(page: str) -> None:
@@ -150,27 +187,51 @@ def init_state() -> None:
         st.session_state["page"] = "home"
 
 
-def render_header(title: str) -> None:
-    # Top-left Repository button + centered title
-    nav_l, nav_c, nav_r = st.columns([1.6, 6, 1.4])
+def render_sidebar() -> None:
+    with st.sidebar:
+        st.markdown(f"## {APP_NAME}")
+        st.caption("Navigation")
 
-    with nav_l:
-        st.markdown('<div class="moments-nav">', unsafe_allow_html=True)
+        st.button("🏠 Home", use_container_width=True, on_click=set_page, args=("home",), key="sb_home")
         st.button(
             "📁 Repository",
             use_container_width=True,
             on_click=set_page,
             args=("repository",),
-            key=f"nav_repository_{title.lower()}",
+            key="sb_repository",
         )
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.button(
+            "✅ Status",
+            use_container_width=True,
+            on_click=set_page,
+            args=("status",),
+            key="sb_status",
+        )
 
-    with nav_c:
-        st.markdown(f"# {APP_NAME} — {title}")
+        st.divider()
+        st.caption("Motivation")
+        quote = random.choice(MOTIVATIONAL_QUOTES)
+        st.markdown(
+            f"""
+<div style="
+  padding: 0.9rem 0.95rem;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.92);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.28);
+">
+  <div style="font-size: 0.95rem; line-height: 1.35;">
+    “{quote}”
+  </div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    with nav_r:
-        # spacer column for symmetry
-        st.write("")
+
+def render_header(title: str) -> None:
+    st.markdown(f"# {APP_NAME} — {title}")
 
 
 def inject_global_css() -> None:
@@ -202,19 +263,6 @@ section.main > div.block-container {
   color: transparent;
 }
 
-/* Repository nav button */
-.moments-nav .stButton > button {
-  height: 2.9rem;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.92);
-  font-weight: 750;
-  box-shadow: 0 8px 22px rgba(0,0,0,0.22);
-}
-.moments-nav .stButton > button:hover {
-  filter: brightness(1.05);
-}
 
 /* Home page hero */
 .moments-hero {
@@ -385,7 +433,7 @@ def render_repository() -> None:
 
     items = list_repository_items()
     if not items:
-        st.info("No summaries saved yet. Go to **Summarise** and click **Save summary to Repository**.")
+        st.info("No summaries saved yet.")
         return
 
     labels = [p.name for p in items]
@@ -395,6 +443,101 @@ def render_repository() -> None:
     st.caption(f"Stored in: {selected}")
     st.markdown(selected.read_text(encoding="utf-8"))
 
+
+def render_status() -> None:
+    render_header("Status")
+
+    st.button("← Back to Home", on_click=set_page, args=("home",))
+    st.divider()
+
+    st.subheader("Slack Reminders — To Do")
+    st.caption("Mark items complete to strike them off.")
+
+    token_from_env = _get_slack_user_token() or ""
+    token = st.text_input(
+        "Slack user token (xoxp-/xoxc-)",
+        value=st.session_state.get("slack_token") or token_from_env,
+        type="password",
+        help="To mark reminders complete, the token must have `reminders:write` in addition to `reminders:read`.",
+        key="status_slack_token",
+    )
+
+    # Keep the token in session so Calendar can reuse it.
+    st.session_state["slack_token"] = token
+
+    if not token:
+        st.info("Add `SLACK_USER_TOKEN` (or paste a token above) to load your reminders.")
+        return
+
+    reminders, err = _fetch_slack_reminders(token)
+    if err:
+        st.error(err)
+        return
+
+    incomplete: list[dict[str, Any]] = [r for r in reminders if not r.get("complete_ts")]
+    complete: list[dict[str, Any]] = [r for r in reminders if r.get("complete_ts")]
+
+    if not incomplete and not complete:
+        st.info("No reminders found in Slack.")
+        return
+
+    # Sort by upcoming time if available
+    def _rem_time(r: dict[str, Any]) -> int:
+        t = r.get("time")
+        return int(t) if isinstance(t, int) else 0
+
+    incomplete.sort(key=_rem_time)
+    complete.sort(key=_rem_time, reverse=True)
+
+    st.markdown("#### To do")
+    any_selected = False
+    selected_ids: list[str] = []
+
+    for r in incomplete:
+        rid = r.get("id")
+        if not isinstance(rid, str) or not rid:
+            continue
+
+        text = str(r.get("text") or "Reminder")
+        t = r.get("time")
+        when = ""
+        if isinstance(t, int):
+            when = dt.datetime.fromtimestamp(t, tz=dt.timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+
+        checked = st.checkbox(
+            f"{text}" + (f"  —  {when}" if when else ""),
+            value=False,
+            key=f"status_done_{rid}",
+        )
+        if checked:
+            any_selected = True
+            selected_ids.append(rid)
+
+    col_a, col_b = st.columns([2, 1])
+    with col_a:
+        if st.button("Mark selected as completed", use_container_width=True, disabled=not any_selected):
+            errors: list[str] = []
+            for rid in selected_ids:
+                ok, e = _complete_slack_reminder(token, rid)
+                if not ok and e:
+                    errors.append(f"{rid}: {e}")
+                # clear checkbox state so it doesn't stay checked
+                st.session_state.pop(f"status_done_{rid}", None)
+
+            if errors:
+                st.error("\n".join(errors))
+            st.rerun()
+
+    with col_b:
+        if st.button("Refresh", use_container_width=True):
+            st.rerun()
+
+    if complete:
+        st.divider()
+        st.markdown("#### Completed")
+        for r in complete:
+            text = str(r.get("text") or "Reminder")
+            st.markdown(f"- ~~{text}~~")
 
 def render_calendar() -> None:
     render_header("Calendar")
@@ -517,6 +660,7 @@ def main() -> None:
     st.set_page_config(page_title=APP_NAME, page_icon="📝", layout="wide")
     inject_global_css()
     init_state()
+    render_sidebar()
 
     page = st.session_state["page"]
 
@@ -528,6 +672,8 @@ def main() -> None:
         render_notifications()
     elif page == "repository":
         render_repository()
+    elif page == "status":
+        render_status()
     elif page == "calendar":
         render_calendar()
     else:
