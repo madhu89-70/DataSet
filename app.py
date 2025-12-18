@@ -8,6 +8,7 @@ from typing import Any
 import requests
 
 import streamlit as st
+BACKEND_URL = "http://127.0.0.1:8000"
 
 try:
     # FullCalendar wrapper for Streamlit (interactive month/week/day grid)
@@ -444,12 +445,59 @@ def render_repository() -> None:
     st.caption(f"Stored in: {selected}")
     st.markdown(selected.read_text(encoding="utf-8"))
 
+def fetch_backend_followups():
+    try:
+        resp = requests.get(f"{BACKEND_URL}/followups", timeout=5)
+        resp.raise_for_status()
+        return resp.json(), None
+    except Exception as e:
+        return [], str(e)
 
 def render_status() -> None:
     render_header("Status")
 
     st.button("← Back to Home", on_click=set_page, args=("home",))
     st.divider()
+    st.subheader("📋 Action Items (From Backend)")
+st.caption("Tasks extracted from summaries and tracked automatically.")
+
+tasks, err = fetch_backend_followups()
+
+if err:
+    st.warning("Backend not reachable. Start the backend server to see tasks.")
+else:
+    total_tasks = len(tasks)
+    completed_tasks = sum(1 for t in tasks if t["status"] == "completed")
+    pending_tasks = sum(1 for t in tasks if t["status"] == "pending")
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("🟡 Pending", pending_tasks)
+    col2.metric("🟢 Completed", completed_tasks)
+    col3.metric("📋 Total", total_tasks)
+
+    if total_tasks > 0:
+        st.progress(completed_tasks / total_tasks)
+        st.caption(f"{int((completed_tasks / total_tasks) * 100)}% completed")
+
+    st.divider()
+    st.markdown("#### Your Tasks")
+
+    if not tasks:
+        st.info("No action items yet.")
+    else:
+        for task in tasks:
+            checked = task["status"] == "completed"
+
+            if st.checkbox(
+                f"{task['task']}  —  {task['owner']}  —  due {task['due_time']}",
+                value=checked,
+                key=f"backend_task_{task['id']}",
+            ):
+                if task["status"] != "completed":
+                    requests.put(
+                        f"{BACKEND_URL}/followups/{task['id']}/complete"
+                    )
+                    st.rerun()
 
     st.subheader("Slack Reminders — To Do")
     st.caption("Mark items complete to strike them off.")
