@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Streamlit secrets (do not commit tokens)
+.streamlit/secrets.toml
+
+# Local environment files
+.env
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

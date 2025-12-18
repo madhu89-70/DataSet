@@ -1,0 +1,4 @@
+streamlit>=1.30
+streamlit-calendar
+slack_sdk>=3.0
+streamlit-autorefresh
